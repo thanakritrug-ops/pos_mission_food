@@ -273,6 +273,7 @@ class POSApp {
             trendMonth:String(new Date().getMonth()+1).padStart(2,'0'),
             trendYear:String(new Date().getFullYear()),
             dailyBarDate:new Date().toISOString().split('T')[0],
+            donutPeriod:'all', donutMonth:'', donutYear:String(new Date().getFullYear()),
         };
 
         let id=1;
@@ -1282,7 +1283,54 @@ class POSApp {
         const allOrdersForTrend=this.state.orders;
         const availTrendYears=[...new Set(allOrdersForTrend.map(o=>String(new Date(o.timestamp).getFullYear())))].sort().reverse();
         const thMonths=[{v:'01',l:'ม.ค.'},{v:'02',l:'ก.พ.'},{v:'03',l:'มี.ค.'},{v:'04',l:'เม.ย.'},{v:'05',l:'พ.ค.'},{v:'06',l:'มิ.ย.'},{v:'07',l:'ก.ค.'},{v:'08',l:'ส.ค.'},{v:'09',l:'ก.ย.'},{v:'10',l:'ต.ค.'},{v:'11',l:'พ.ย.'},{v:'12',l:'ธ.ค.'}];
-        return`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px"><div class="pbi-kpi c1"><div style="font-size:18px;margin-bottom:2px">💰</div><div style="font-size:10px;color:#888">ยอดขายรวม</div><div style="font-size:24px;font-weight:700">฿${Math.round(totalRev).toLocaleString()}</div><div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span class="pbi-badge up">${days} วัน</span><span style="font-size:9px;color:#aaa">${Math.round(totalRev/days).toLocaleString()} บาท/วัน</span></div></div><div class="pbi-kpi c2"><div style="font-size:18px;margin-bottom:2px">📈</div><div style="font-size:10px;color:#888">กำไรสุทธิ</div><div style="font-size:24px;font-weight:700">฿${Math.round(totalProfit).toLocaleString()}</div><div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span class="pbi-badge up">Margin ${margin.toFixed(1)}%</span></div></div><div class="pbi-kpi c3"><div style="font-size:18px;margin-bottom:2px">🧾</div><div style="font-size:10px;color:#888">จำนวนออเดอร์</div><div style="font-size:24px;font-weight:700">${totalOrders.toLocaleString()}</div><div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span class="pbi-badge neu">${Math.round(totalOrders/days)} ออเดอร์/วัน</span></div></div><div class="pbi-kpi c4"><div style="font-size:18px;margin-bottom:2px">📦</div><div style="font-size:10px;color:#888">จำนวนชิ้น</div><div style="font-size:24px;font-weight:700">${totalItems.toLocaleString()}</div><div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span class="pbi-badge neu">${Math.round(totalItems/days)} ชิ้น/วัน</span></div></div></div><div style="display:grid;grid-template-columns:3fr 2fr;gap:12px;margin-bottom:14px"><div class="pbi-card"><div class="pbi-card-header"><div class="pbi-card-title">📉 แนวโน้มยอดขาย</div><div class="pbi-actions" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><select id="trend-month-sel" style="padding:2px 6px;border:1px solid #B2DFDB;border-radius:6px;font-size:11px;background:white;cursor:pointer">${thMonths.map(m=>`<option value="${m.v}" ${m.v===trendMonth?'selected':''}>${m.l}</option>`).join('')}</select><select id="trend-year-sel" style="padding:2px 6px;border:1px solid #B2DFDB;border-radius:6px;font-size:11px;background:white;cursor:pointer">${(availTrendYears.length?availTrendYears:[String(new Date().getFullYear())]).map(y=>`<option value="${y}" ${y===trendYear?'selected':''}>${parseInt(y)+543}</option>`).join('')}</select><button class="pbi-abtn ${(this._pbiLineMode||'rev')==='rev'?'active':''}" data-line-mode="rev">ยอดขาย</button><button class="pbi-abtn ${this._pbiLineMode==='profit'?'active':''}" data-line-mode="profit">กำไร</button><button class="pbi-abtn ${this._pbiLineMode==='orders'?'active':''}" data-line-mode="orders">ออเดอร์</button></div></div><canvas id="pbiLineChart" height="130"></canvas></div><div class="pbi-card"><div class="pbi-card-header"><div class="pbi-card-title">🍩 สัดส่วนหมวดหมู่</div><div class="pbi-actions"><button class="pbi-abtn active" data-donut-mode="rev">ยอดขาย</button><button class="pbi-abtn" data-donut-mode="qty">จำนวน</button></div></div><div style="display:flex;gap:12px;align-items:center"><canvas id="pbiDonutChart" width="120" height="120" style="flex-shrink:0"></canvas><div style="flex:1">${cats.map(([k,c])=>`<div class="dl-row"><div class="dl-dot" style="background:${c.color}"></div><div style="font-size:11px;flex:1">${c.name}</div><div style="font-size:11px;font-weight:700">฿${Math.round(c.rev).toLocaleString()}</div><div style="font-size:10px;color:#888;min-width:35px;text-align:right">${catTotal>0?(c.rev/catTotal*100).toFixed(1):0}%</div></div>`).join('')}</div></div></div></div><div class="pbi-card"><div class="pbi-card-header"><div class="pbi-card-title">📊 ยอดขายรายวัน</div><div class="pbi-actions" style="display:flex;align-items:center;gap:5px;flex-wrap:wrap"><button id="daily-bar-prev" style="padding:2px 8px;border:1px solid #B2DFDB;border-radius:4px;font-size:11px;cursor:pointer;background:white">◀</button><input type="date" id="daily-bar-date" value="${this.state.dailyBarDate}" style="padding:2px 6px;border:1px solid #B2DFDB;border-radius:6px;font-size:11px;background:white;cursor:pointer"><button id="daily-bar-next" style="padding:2px 8px;border:1px solid #B2DFDB;border-radius:4px;font-size:11px;cursor:pointer;background:white">▶</button><button id="daily-bar-today" style="padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;background:#00BFA5;color:white;border:none">วันนี้</button></div></div><div id="daily-bar-summary" style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap"></div><canvas id="pbiBarChart" height="90"></canvas></div>`;
+        // === Donut filter: month + year independent ===
+        const donutMode=this._pbiDonutMode||'rev';
+        const donutSelMonth=this._donutSelMonth||'all';
+        const donutSelYear=this._donutSelYear||'all';
+        const availDonutYears=[...new Set(this.state.orders.map(o=>String(new Date(o.timestamp).getFullYear())))].sort().reverse();
+        const donutOrders=this.state.orders.filter(o=>{
+            const d=new Date(o.timestamp);
+            const oYear=String(d.getFullYear());
+            const oMonth=String(d.getMonth()+1).padStart(2,'0');
+            if(donutSelYear!=='all'&&oYear!==donutSelYear)return false;
+            if(donutSelMonth!=='all'&&oMonth!==donutSelMonth)return false;
+            return true;
+        });
+        const donutYear=donutSelYear;
+        const donutCatMap={};
+        donutOrders.forEach(o=>o.items.forEach(item=>{const ck=item.category;if(!donutCatMap[ck])donutCatMap[ck]={name:this.getCategoryName(ck),rev:0,qty:0,profit:0,color:({coffee:'#0078d4',tea:'#107c10',softdrink:'#d83b01',bakery:'#8764b8',promotion:'#f2a500',other:'#8a8886'})[ck]||'#ccc'};donutCatMap[ck].rev+=item.price*item.quantity;donutCatMap[ck].qty+=item.quantity;donutCatMap[ck].profit+=(item.price-item.cost)*item.quantity;}));
+        const donutCats=Object.entries(donutCatMap).sort((a,b)=>b[1][donutMode]-(a[1][donutMode]||0));
+        const donutTotal=donutCats.reduce((s,[,c])=>s+(donutMode==='qty'?c.qty:c.rev),0);
+        const donutUnit=donutMode==='qty'?'ชิ้น':'฿';
+
+        return`<div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:14px"><div class="pbi-kpi c1"><div style="font-size:18px;margin-bottom:2px">💰</div><div style="font-size:10px;color:#888">ยอดขายรวม</div><div style="font-size:24px;font-weight:700">฿${Math.round(totalRev).toLocaleString()}</div><div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span class="pbi-badge up">${days} วัน</span><span style="font-size:9px;color:#aaa">${Math.round(totalRev/days).toLocaleString()} บาท/วัน</span></div></div><div class="pbi-kpi c2"><div style="font-size:18px;margin-bottom:2px">📈</div><div style="font-size:10px;color:#888">กำไรสุทธิ</div><div style="font-size:24px;font-weight:700">฿${Math.round(totalProfit).toLocaleString()}</div><div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span class="pbi-badge up">Margin ${margin.toFixed(1)}%</span></div></div><div class="pbi-kpi c3"><div style="font-size:18px;margin-bottom:2px">🧾</div><div style="font-size:10px;color:#888">จำนวนออเดอร์</div><div style="font-size:24px;font-weight:700">${totalOrders.toLocaleString()}</div><div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span class="pbi-badge neu">${Math.round(totalOrders/days)} ออเดอร์/วัน</span></div></div><div class="pbi-kpi c4"><div style="font-size:18px;margin-bottom:2px">📦</div><div style="font-size:10px;color:#888">จำนวนชิ้น</div><div style="font-size:24px;font-weight:700">${totalItems.toLocaleString()}</div><div style="display:flex;align-items:center;gap:6px;margin-top:4px"><span class="pbi-badge neu">${Math.round(totalItems/days)} ชิ้น/วัน</span></div></div></div>
+        <div style="display:grid;grid-template-columns:3fr 2fr;gap:12px;margin-bottom:14px">
+        <div class="pbi-card"><div class="pbi-card-header"><div class="pbi-card-title">📉 แนวโน้มยอดขาย</div><div class="pbi-actions" style="display:flex;gap:6px;align-items:center;flex-wrap:wrap"><select id="trend-month-sel" style="padding:2px 6px;border:1px solid #B2DFDB;border-radius:6px;font-size:11px;background:white;cursor:pointer">${thMonths.map(m=>`<option value="${m.v}" ${m.v===trendMonth?'selected':''}>${m.l}</option>`).join('')}</select><select id="trend-year-sel" style="padding:2px 6px;border:1px solid #B2DFDB;border-radius:6px;font-size:11px;background:white;cursor:pointer">${(availTrendYears.length?availTrendYears:[String(new Date().getFullYear())]).map(y=>`<option value="${y}" ${y===trendYear?'selected':''}>${parseInt(y)+543}</option>`).join('')}</select><button class="pbi-abtn ${(this._pbiLineMode||'rev')==='rev'?'active':''}" data-line-mode="rev">ยอดขาย</button><button class="pbi-abtn ${this._pbiLineMode==='profit'?'active':''}" data-line-mode="profit">กำไร</button><button class="pbi-abtn ${this._pbiLineMode==='orders'?'active':''}" data-line-mode="orders">ออเดอร์</button></div></div><canvas id="pbiLineChart" height="130"></canvas></div>
+        <div class="pbi-card">
+            <div class="pbi-card-header">
+                <div class="pbi-card-title">🍩 สัดส่วนหมวดหมู่</div>
+                <div class="pbi-actions" style="display:flex;gap:4px;flex-wrap:wrap;align-items:center">
+                    <button class="pbi-abtn ${donutMode==='rev'?'active':''}" data-donut-mode="rev">ยอดขาย</button>
+                    <button class="pbi-abtn ${donutMode==='qty'?'active':''}" data-donut-mode="qty">จำนวน</button>
+                    <select id="donut-month-sel" style="padding:2px 6px;border:1px solid #B2DFDB;border-radius:6px;font-size:11px;background:white;cursor:pointer">
+                        <option value="all" ${donutSelMonth==='all'?'selected':''}>ทุกเดือน</option>
+                        ${['ม.ค.','ก.พ.','มี.ค.','เม.ย.','พ.ค.','มิ.ย.','ก.ค.','ส.ค.','ก.ย.','ต.ค.','พ.ย.','ธ.ค.'].map((label,i)=>`<option value="${String(i+1).padStart(2,'0')}" ${donutSelMonth===String(i+1).padStart(2,'0')?'selected':''}>${label}</option>`).join('')}
+                    </select>
+                    <select id="donut-year-sel" style="padding:2px 6px;border:1px solid #B2DFDB;border-radius:6px;font-size:11px;background:white;cursor:pointer">
+                        <option value="all" ${donutSelYear==='all'?'selected':''}>ทุกปี</option>
+                        ${availDonutYears.map(y=>`<option value="${y}" ${donutSelYear===y?'selected':''}>ปี ${parseInt(y)+543}</option>`).join('')}
+                    </select>
+                </div>
+            </div>
+            <div style="display:flex;gap:12px;align-items:center">
+                <canvas id="pbiDonutChart" width="120" height="120" style="flex-shrink:0"></canvas>
+                <div style="flex:1" id="donut-legend">
+                    ${donutCats.map(([k,c])=>{const val=donutMode==='qty'?c.qty:donutMode==='profit'?c.profit:c.rev;const pct=donutTotal>0?(val/donutTotal*100).toFixed(1):0;return`<div class="dl-row"><div class="dl-dot" style="background:${c.color}"></div><div style="font-size:11px;flex:1">${c.name}</div><div style="font-size:11px;font-weight:700">${donutMode==='qty'?val.toLocaleString()+' ชิ้น':'฿'+Math.round(val).toLocaleString()}</div><div style="font-size:10px;color:#888;min-width:35px;text-align:right">${pct}%</div></div>`;}).join('')}
+                </div>
+            </div>
+        </div>
+        </div>
+        <div class="pbi-card"><div class="pbi-card-header"><div class="pbi-card-title">📊 ยอดขายรายวัน</div><div class="pbi-actions" style="display:flex;align-items:center;gap:5px;flex-wrap:wrap"><button id="daily-bar-prev" style="padding:2px 8px;border:1px solid #B2DFDB;border-radius:4px;font-size:11px;cursor:pointer;background:white">◀</button><input type="date" id="daily-bar-date" value="${this.state.dailyBarDate}" style="padding:2px 6px;border:1px solid #B2DFDB;border-radius:6px;font-size:11px;background:white;cursor:pointer"><button id="daily-bar-next" style="padding:2px 8px;border:1px solid #B2DFDB;border-radius:4px;font-size:11px;cursor:pointer;background:white">▶</button><button id="daily-bar-today" style="padding:2px 8px;border-radius:4px;font-size:11px;cursor:pointer;background:#00BFA5;color:white;border:none">วันนี้</button></div></div><div id="daily-bar-summary" style="display:flex;gap:8px;margin-bottom:8px;flex-wrap:wrap"></div><canvas id="pbiBarChart" height="90"></canvas></div>`;
 
     }
     renderPBIProducts(agg){const tc=this.state.dashTopCat;const allProds=Object.values(agg.prodMap);const filtered=tc==='all'?allProds:allProds.filter(p=>p.catKey===tc);const top=filtered.sort((a,b)=>b.qty-a.qty).slice(0,10);const maxQty=top.length?Math.max(...top.map(p=>p.qty)):1;return`<div style="display:flex;gap:5px;margin-bottom:14px;flex-wrap:wrap;align-items:center"><span style="font-size:11px;color:#888;font-weight:600">📦 หมวดหมู่:</span><button data-dtop-cat="all" class="fbtn-dash ${tc==='all'?'active':''}">ทั้งหมด</button>${this.categories.map(c=>`<button data-dtop-cat="${c.id}" class="fbtn-dash ${tc===c.id?'active':''}">${c.icon} ${c.name}</button>`).join('')}</div>${!top.length?'<div class="text-center py-8 text-gray-400">ไม่มีข้อมูล</div>':`<div class="space-y-2">${top.map((p,i)=>`<div class="bar-container"><div class="bar-label">${['🥇','🥈','🥉'][i]||`${i+1}.`} ${p.name}</div><div class="bar-track"><div class="bar-fill" style="width:${(p.qty/maxQty*100).toFixed(1)}%"><span class="bar-value">${p.qty} ชิ้น | ฿${Math.round(p.rev).toLocaleString()}</span></div></div></div>`).join('')}</div>`}`;}
@@ -1352,7 +1400,51 @@ class POSApp {
             }
         }
         const donutEl=document.getElementById('pbiDonutChart');
-        if(donutEl){const ctx=donutEl.getContext('2d');const cats=Object.values(agg.catMap);const mode2=this._pbiDonutMode||'rev';this._pbiCharts.donut=new Chart(ctx,{type:'doughnut',data:{labels:cats.map(c=>c.name),datasets:[{data:cats.map(c=>mode2==='qty'?c.qty:c.rev),backgroundColor:cats.map(c=>c.color),borderWidth:2,borderColor:'white'}]},options:{responsive:false,plugins:{legend:{display:false}}}});}
+        if(donutEl){
+            const renderDonut=()=>{
+                const dMode=this._pbiDonutMode||'rev';
+                const dSelMonth=this._donutSelMonth||'all';
+                const dSelYear=this._donutSelYear||'all';
+                const dOrders=this.state.orders.filter(o=>{
+                    const d=new Date(o.timestamp);
+                    const oY=String(d.getFullYear());
+                    const oM=String(d.getMonth()+1).padStart(2,'0');
+                    if(dSelYear!=='all'&&oY!==dSelYear)return false;
+                    if(dSelMonth!=='all'&&oM!==dSelMonth)return false;
+                    return true;
+                });
+                const dCatMap={};
+                dOrders.forEach(o=>o.items.forEach(item=>{const ck=item.category;if(!dCatMap[ck])dCatMap[ck]={name:this.getCategoryName(ck),rev:0,qty:0,profit:0,color:({coffee:'#0078d4',tea:'#107c10',softdrink:'#d83b01',bakery:'#8764b8',promotion:'#f2a500',other:'#8a8886'})[ck]||'#ccc'};dCatMap[ck].rev+=item.price*item.quantity;dCatMap[ck].qty+=item.quantity;dCatMap[ck].profit+=(item.price-item.cost)*item.quantity;}));
+                const dCats=Object.values(dCatMap).sort((a,b)=>b[dMode]-a[dMode]);
+                const dTotal=dCats.reduce((s,c)=>s+(dMode==='qty'?c.qty:dMode==='profit'?c.profit:c.rev),0);
+                // update chart
+                if(this._pbiCharts.donut){try{this._pbiCharts.donut.destroy();}catch(e){}}
+                const ctx=donutEl.getContext('2d');
+                this._pbiCharts.donut=new Chart(ctx,{type:'doughnut',data:{labels:dCats.map(c=>c.name),datasets:[{data:dCats.map(c=>dMode==='qty'?c.qty:dMode==='profit'?c.profit:c.rev),backgroundColor:dCats.map(c=>c.color),borderWidth:2,borderColor:'white'}]},options:{responsive:false,plugins:{legend:{display:false}}}});
+                // update legend HTML
+                const legendEl=document.getElementById('donut-legend');
+                if(legendEl){legendEl.innerHTML=dCats.map(c=>{const val=dMode==='qty'?c.qty:dMode==='profit'?c.profit:c.rev;const pct=dTotal>0?(val/dTotal*100).toFixed(1):0;return`<div class="dl-row"><div class="dl-dot" style="background:${c.color}"></div><div style="font-size:11px;flex:1">${c.name}</div><div style="font-size:11px;font-weight:700">${dMode==='qty'?Math.round(val).toLocaleString()+' ชิ้น':'฿'+Math.round(val).toLocaleString()}</div><div style="font-size:10px;color:#888;min-width:35px;text-align:right">${pct}%</div></div>`;}).join('');}
+            };
+            renderDonut();
+            // Bind mode buttons (ยอดขาย/จำนวน/กำไร)
+            document.querySelectorAll('[data-donut-mode]').forEach(btn=>btn.addEventListener('click',e=>{
+                this._pbiDonutMode=e.currentTarget.dataset.donutMode;
+                document.querySelectorAll('[data-donut-mode]').forEach(b=>b.classList.toggle('active',b===e.currentTarget));
+                renderDonut();
+            }));
+            // Bind month dropdown (independent)
+            const donutMonthSel=document.getElementById('donut-month-sel');
+            if(donutMonthSel)donutMonthSel.addEventListener('change',e=>{
+                this._donutSelMonth=e.target.value;
+                renderDonut();
+            });
+            // Bind year dropdown (independent)
+            const donutYearSel=document.getElementById('donut-year-sel');
+            if(donutYearSel)donutYearSel.addEventListener('change',e=>{
+                this._donutSelYear=e.target.value;
+                renderDonut();
+            });
+        }
         const barEl=document.getElementById('pbiBarChart');
         if(barEl){
             const renderDailyBar=(targetDate)=>{
@@ -1383,6 +1475,8 @@ class POSApp {
                         ?`<span style="font-size:11px;color:#aaa">ไม่มีข้อมูลวันนี้</span>`
                         :`<span style="font-size:11px;background:#E0F7FA;color:#007c70;padding:3px 10px;border-radius:20px">📅 ${thDate}</span><span style="font-size:11px;background:#dff6dd;color:#107c10;padding:3px 10px;border-radius:20px">💰 ฿${Math.round(totRev).toLocaleString()}</span><span style="font-size:11px;background:#e8f4fd;color:#0078d4;padding:3px 10px;border-radius:20px">📈 กำไร ฿${Math.round(totProf).toLocaleString()}</span><span style="font-size:11px;background:#f3f2f1;color:#666;padding:3px 10px;border-radius:20px">🧾 ${totOrd} ออเดอร์</span>`;
                 }
+                // update date input value (sync before drawing chart)
+                const diInner=document.getElementById('daily-bar-date');if(diInner)diInner.value=clampedDate;
                 // destroy old chart
                 if(this._pbiCharts.bar){try{this._pbiCharts.bar.destroy();}catch(e){}}
                 if(!dayOrders.length){barEl.style.display='none';return;}
@@ -1392,33 +1486,44 @@ class POSApp {
                     {label:'ยอดขาย',data:revData,backgroundColor:'#ef444455',borderColor:'#ef4444',borderWidth:1,borderRadius:4},
                     {label:'กำไร',data:profData,backgroundColor:'#22c55e55',borderColor:'#22c55e',borderWidth:1,borderRadius:4},
                 ]},options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{labels:{font:{size:9}}},tooltip:{callbacks:{label:c=>`${c.dataset.label}: ฿${Math.round(c.parsed.y).toLocaleString()}`}}},scales:{x:{ticks:{font:{size:9}},grid:{display:false}},y:{ticks:{font:{size:9},callback:v=>'฿'+Math.round(v).toLocaleString()},grid:{color:'#F0FDFA'}}}}});
-                // update date input value
-                const di=document.getElementById('daily-bar-date');if(di)di.value=clampedDate;
             };
-            renderDailyBar(this.state.dailyBarDate);
-            // bind date input
-            const di=document.getElementById('daily-bar-date');
-            if(di)di.addEventListener('change',e=>{this.state.dailyBarDate=e.target.value;renderDailyBar(e.target.value);});
-            // bind prev/next/today buttons
+            // Fix: resolve the effective start date (clamp to latest date with data if today has no data)
             const allOrd2=this.state.orders;
             const allDates2=[...new Set(allOrd2.map(o=>o.timestamp.split('T')[0]))].sort();
             const todayStr=new Date().toISOString().split('T')[0];
+            // If current dailyBarDate has no data, auto-jump to the latest date that has data
+            const effectiveStartDate=(()=>{
+                if(allDates2.includes(this.state.dailyBarDate))return this.state.dailyBarDate;
+                return allDates2.length?allDates2[allDates2.length-1]:this.state.dailyBarDate;
+            })();
+            if(this.state.dailyBarDate!==effectiveStartDate){this.state.dailyBarDate=effectiveStartDate;}
+            renderDailyBar(effectiveStartDate);
+            // bind date input
+            const di=document.getElementById('daily-bar-date');
+            if(di){di.value=this.state.dailyBarDate;di.addEventListener('change',e=>{this.state.dailyBarDate=e.target.value;renderDailyBar(e.target.value);});}
+            // bind prev/next/today buttons
             const prevBtn=document.getElementById('daily-bar-prev');
             const nextBtn=document.getElementById('daily-bar-next');
             const todayBtn=document.getElementById('daily-bar-today');
             if(prevBtn)prevBtn.addEventListener('click',()=>{
                 const cur=this.state.dailyBarDate;
-                const idx=allDates2.indexOf(cur);
-                const newDate=idx>0?allDates2[idx-1]:(()=>{const d=new Date(cur);d.setDate(d.getDate()-1);return d.toISOString().split('T')[0];})();
+                const allD=[...new Set(this.state.orders.map(o=>o.timestamp.split('T')[0]))].sort();
+                const idx=allD.indexOf(cur);
+                const newDate=idx>0?allD[idx-1]:(()=>{const d=new Date(cur);d.setDate(d.getDate()-1);return d.toISOString().split('T')[0];})();
                 this.state.dailyBarDate=newDate;renderDailyBar(newDate);
             });
             if(nextBtn)nextBtn.addEventListener('click',()=>{
                 const cur=this.state.dailyBarDate;
-                const idx=allDates2.indexOf(cur);
-                const newDate=(idx>=0&&idx<allDates2.length-1)?allDates2[idx+1]:(()=>{const d=new Date(cur);d.setDate(d.getDate()+1);return d.toISOString().split('T')[0];})();
+                const allD=[...new Set(this.state.orders.map(o=>o.timestamp.split('T')[0]))].sort();
+                const idx=allD.indexOf(cur);
+                const newDate=(idx>=0&&idx<allD.length-1)?allD[idx+1]:(()=>{const d=new Date(cur);d.setDate(d.getDate()+1);return d.toISOString().split('T')[0];})();
                 this.state.dailyBarDate=newDate;renderDailyBar(newDate);
             });
-            if(todayBtn)todayBtn.addEventListener('click',()=>{this.state.dailyBarDate=todayStr;renderDailyBar(todayStr);});
+            if(todayBtn)todayBtn.addEventListener('click',()=>{
+                const allD=[...new Set(this.state.orders.map(o=>o.timestamp.split('T')[0]))].sort();
+                const target=allD.includes(todayStr)?todayStr:(allD.length?allD[allD.length-1]:todayStr);
+                this.state.dailyBarDate=target;renderDailyBar(target);
+            });
         }
         const timeEl=document.getElementById('pbiTimeChart');
         if(timeEl){const ctx=timeEl.getContext('2d');const hrs=Array.from({length:24},(_,h)=>h);const data=hrs.map(h=>{const f=agg.hourly.find(x=>x.hour===h);return f?f.orders:0;});const datasets2=[{label:'ออเดอร์ (A)',data,backgroundColor:data.map(v=>v===Math.max(...data)?'#00BFA5':'#e0ddd8'),borderRadius:4}];if(prevAgg&&prevAgg.hourly.length){const prevData=hrs.map(h=>{const f=prevAgg.hourly.find(x=>x.hour===h);return f?f.orders:0;});datasets2.push({label:'ออเดอร์ (B)',data:prevData,backgroundColor:'#d0700055',borderRadius:4});}this._pbiCharts.time=new Chart(ctx,{type:'bar',data:{labels:hrs.map(h=>`${String(h).padStart(2,'0')}:00`),datasets:datasets2},options:{responsive:true,maintainAspectRatio:true,plugins:{legend:{display:datasets2.length>1,labels:{font:{size:9}}}},scales:{x:{ticks:{font:{size:8},maxTicksLimit:12},grid:{display:false}},y:{ticks:{font:{size:9},stepSize:1},grid:{color:'#F0FDFA'}}}}});}
@@ -1652,7 +1757,7 @@ class POSApp {
         document.querySelectorAll('.dash-nav').forEach(el=>el.addEventListener('click',e=>{const nav=e.currentTarget.dataset.dashNav;if(nav==='prev-day'){const d=new Date(this.state.dashDate);d.setDate(d.getDate()-1);this.state.dashDate=d.toISOString().split('T')[0];}if(nav==='next-day'){const d=new Date(this.state.dashDate);d.setDate(d.getDate()+1);this.state.dashDate=d.toISOString().split('T')[0];}if(nav==='today')this.state.dashDate=new Date().toISOString().split('T')[0];this.render();}));
         document.querySelectorAll('[data-dtop-cat]').forEach(el=>el.addEventListener('click',e=>{this.state.dashTopCat=e.currentTarget.dataset.dtopCat;this.render();}));
         document.querySelectorAll('[data-line-mode]').forEach(el=>el.addEventListener('click',e=>{this._pbiLineMode=e.currentTarget.dataset.lineMode;e.currentTarget.parentElement.querySelectorAll('.pbi-abtn').forEach(b=>b.classList.remove('active'));e.currentTarget.classList.add('active');this.initDashboardCharts();}));
-        document.querySelectorAll('[data-donut-mode]').forEach(el=>el.addEventListener('click',e=>{this._pbiDonutMode=e.currentTarget.dataset.donutMode;e.currentTarget.parentElement.querySelectorAll('.pbi-abtn').forEach(b=>b.classList.remove('active'));e.currentTarget.classList.add('active');this.initDashboardCharts();}));
+        // [data-donut-mode] and [data-donut-period] are bound inside initDashboardCharts()
         // Export
         document.querySelectorAll('[data-export-period]').forEach(el=>el.addEventListener('click',e=>{this.state.exportPeriod=e.currentTarget.dataset.exportPeriod;this.render();}));
         const ed=document.getElementById('export-date');if(ed)ed.addEventListener('change',e=>{this.state.exportDate=e.target.value;this.render();});
