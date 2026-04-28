@@ -259,6 +259,7 @@ class POSApp {
             autoExportSheets:localStorage.getItem('autoExportSheets')==='true',
             supabaseUrl: localStorage.getItem('supabaseUrl') || 'https://supabase.com/dashboard/project/xqngcaxstmwivaxeatur/settings/api-keys',
             supabaseKey: localStorage.getItem('supabaseKey') || 'sb_publishable_9afMzestxvx03XzqjmFMjg_2iikhvSY',
+            firebaseUrl: localStorage.getItem('firebaseUrl') || 'https://mission-a9105-default-rtdb.firebaseio.com/',
             showDemoGenerator:false, demoMonths:3, demoOrdersPerDay:'15-30', demoPeakHour:true,
             // New
             showReceipt:false, lastOrder:null, loginError:'',
@@ -391,6 +392,19 @@ class POSApp {
             this.loadFromSupabase();
             this.startRealtimeSync();
             this.startPolling();
+            document.addEventListener('visibilitychange', () => {
+                if(document.visibilityState === 'visible' && this.state.supabaseUrl && this.state.supabaseKey) {
+                    this.loadFromSupabase();
+                }
+            });
+        }
+        // Firebase
+        if(this.state.firebaseUrl) {
+            this.loadFromFirebase();
+            this.startFirebaseSync();
+            document.addEventListener('visibilitychange', () => {
+                if(document.visibilityState === 'visible' && this.state.firebaseUrl) this.loadFromFirebase();
+            });
         }
     }
 
@@ -593,7 +607,7 @@ class POSApp {
                 }
                 if(cfgChanged) this.render();
             }
-        },30000); // ซิงค์ทุก 30 วินาที
+        },5000); // ซิงค์ทุก 5 วินาที (fallback จาก WebSocket)
     }
 
     // ==================== SUPABASE REALTIME ====================
@@ -646,6 +660,123 @@ class POSApp {
         };
     }
 
+    // ==================== FIREBASE REALTIME DATABASE ====================
+    _fbUrl(path){ return `${this.state.firebaseUrl.replace(/\/$/,'')}/${path}.json`; }
+
+    async _fbGet(path){
+        try{ const r=await fetch(this._fbUrl(path)); if(!r.ok) return null; const d=await r.json(); return d; }catch(e){ return null; }
+    }
+    async _fbSet(path,data){
+        try{ await fetch(this._fbUrl(path),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}); return true; }catch(e){ return false; }
+    }
+    async _fbPatch(path,data){
+        try{ await fetch(this._fbUrl(path),{method:'PATCH',headers:{'Content-Type':'application/json'},body:JSON.stringify(data)}); return true; }catch(e){ return false; }
+    }
+    async _fbDelete(path){
+        try{ await fetch(this._fbUrl(path),{method:'DELETE'}); return true; }catch(e){ return false; }
+    }
+
+    async syncToFirebase(order){
+        if(!this.state.firebaseUrl||!navigator.onLine) return;
+        const slim=this._slimOrder(order);
+        await this._fbSet(`orders/${slim.id}`,slim);
+    }
+    async deleteOrderFromFirebase(id){
+        if(!this.state.firebaseUrl) return;
+        await this._fbDelete(`orders/${id}`);
+    }
+    async syncConfigToFirebase(key,value){
+        if(!this.state.firebaseUrl||!navigator.onLine) return;
+        const v=typeof value==='string'?value:JSON.stringify(value);
+        await this._fbSet(`config/${key}`,v);
+    }
+
+    async loadFromFirebase(){
+        if(!this.state.firebaseUrl||!navigator.onLine) return;
+        console.log('[FB] โหลดข้อมูลจาก Firebase...');
+        // Load orders
+        const ordersRaw=await this._fbGet('orders');
+        if(ordersRaw){
+            const orders=Object.values(ordersRaw).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+            if(orders.length>0){ this.state.orders=orders; this._saveBatch(orders); }
+        }
+        // Load config
+        const cfg=await this._fbGet('config');
+        if(cfg){
+            try{
+                if(cfg.products){const p=JSON.parse(cfg.products);if(p&&p.length>0){this.products=p;localStorage.setItem('pos_products_custom',cfg.products);}}
+                if(cfg.users){const u=JSON.parse(cfg.users);if(u&&u.length>0){this.auth.users=u;localStorage.setItem('pos_users',cfg.users);}}
+                if(cfg.shop_name){this.shopName=cfg.shop_name;localStorage.setItem('pos_shop_name',cfg.shop_name);}
+            }catch(e){}
+        }
+        this.render();
+        console.log('[FB] โหลดสำเร็จ ✅');
+    }
+
+    startFirebaseSync(){
+        if(!this.state.firebaseUrl) return;
+        if(this._fbEs){try{this._fbEs.close();}catch(e){} this._fbEs=null;}
+        const url=this._fbUrl('orders')+'?orderBy=%22timestamp%22';
+        try{
+            const es=new EventSource(url);
+            this._fbEs=es;
+            es.addEventListener('put',(e)=>{
+                try{
+                    const d=JSON.parse(e.data);
+                    if(!d||!d.data) return;
+                    // Full replace (initial load or big change)
+                    if(d.path==='/'&&typeof d.data==='object'){
+                        const orders=Object.values(d.data).sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+                        this.state.orders=orders; this._saveBatch(orders); this.render();
+                    } else if(d.path&&d.path.length>1&&d.data){
+                        // Single order change
+                        const o=d.data;
+                        const idx=this.state.orders.findIndex(x=>x.id===o.id);
+                        if(idx<0){this.state.orders.unshift(o);}else{this.state.orders[idx]=o;}
+                        this.state.orders.sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+                        this.updateOrderById(o); this.render();
+                        console.log('[FB] ออเดอร์ใหม่จากเครื่องอื่น:',o.id);
+                    } else if(d.path&&d.path.length>1&&d.data===null){
+                        // Deleted
+                        const id=parseInt(d.path.replace('/',''));
+                        if(id){this.state.orders=this.state.orders.filter(x=>x.id!==id);this.deleteOrderById(id);this.render();}
+                    }
+                }catch(err){console.warn('[FB] parse error',err);}
+            });
+            es.addEventListener('patch',(e)=>{
+                try{
+                    const d=JSON.parse(e.data);
+                    if(!d||!d.data) return;
+                    Object.values(d.data).forEach(o=>{
+                        if(!o) return;
+                        const idx=this.state.orders.findIndex(x=>x.id===o.id);
+                        if(idx<0){this.state.orders.unshift(o);}else{this.state.orders[idx]=o;}
+                        this.updateOrderById(o);
+                    });
+                    this.state.orders.sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));
+                    this.render();
+                }catch(err){}
+            });
+            es.onerror=()=>{
+                console.warn('[FB] SSE ตัด — reconnect ใน 5 วินาที');
+                es.close();
+                setTimeout(()=>{ if(this.state.firebaseUrl&&this._fbEs===es) this.startFirebaseSync(); },5000);
+            };
+            console.log('[FB] Realtime sync เปิดแล้ว ✅');
+        }catch(e){ console.warn('[FB] SSE ไม่รองรับ'); }
+    }
+
+    async _syncFirebaseBatch(orders, offset){
+        const BATCH=100;
+        const slice=orders.slice(offset,offset+BATCH);
+        if(!slice.length){ console.log('[FB] อัปโหลดครบแล้ว!'); return; }
+        const obj={};
+        slice.forEach(o=>{ obj[o.id]=this._slimOrder(o); });
+        await this._fbPatch('orders',obj);
+        console.log(`[FB] อัปโหลด ${Math.min(offset+BATCH,orders.length)}/${orders.length}`);
+        setTimeout(()=>this._syncFirebaseBatch(orders,offset+BATCH),200);
+    }
+
     // ==================== CART ACTIONS ====================
     addToCart(product) {
         if(product.isDrink){this.state.showSweetness=true;this.state.sweetnessProduct=product;this.render();return;}
@@ -676,6 +807,8 @@ class POSApp {
         this.saveOrders();
         // Supabase sync
         this.syncToSupabase(order);
+        // Firebase sync
+        this.syncToFirebase(order);
         // Auto Google Sheets
         if(this.state.autoExportSheets&&this.state.googleSheetUrl) this.sendOrderToSheets(order);
         // Show receipt
@@ -802,7 +935,9 @@ class POSApp {
                 </div>
                 <div id="settings-menu" style="overflow:hidden;transition:max-height .25s ease;max-height:${this.state.settingsOpen!==false?'400px':'0px'}">
                     ${this.auth.can('settings')?`<div class="settings-btn nav-item"><span class="nav-icon">📊</span>Google Drive ${this.state.autoExportSheets&&this.state.googleSheetUrl?'<span style="color:#00BFA5;margin-left:auto">●</span>':''}</div>`:''}
-                    ${this.auth.can('supabase')?`<div class="supabase-btn nav-item"><span class="nav-icon">☁️</span>Supabase Cloud ${this.state.supabaseUrl?'<span style="color:#10b981;margin-left:auto" title="Realtime sync เปิดอยู่">⚡</span>':''}</div>`:''}
+                    ${this.auth.can('supabase')?`<div class="firebase-btn nav-item"><span class="nav-icon">🔥</span>Firebase ${this.state.firebaseUrl?'<span style="color:#f97316;margin-left:auto">⚡</span>':''}</div>`:''}
+                    ${this.auth.can('supabase')?`<div class="supabase-btn nav-item"><span class="nav-icon">☁️</span>Supabase ${this.state.supabaseUrl?'<span style="color:#10b981;margin-left:auto">⚡</span>':''}</div>`:''}
+                    ${(this.state.firebaseUrl||this.state.supabaseUrl)?`<div class="sync-now-btn nav-item" style="color:rgba(0,191,165,.85)"><span class="nav-icon">🔄</span>ดึงข้อมูลตอนนี้</div>`:''}
                     ${this.auth.can('manage_products')?`<div class="product-mgmt-btn nav-item"><span class="nav-icon">🛍️</span>จัดการสินค้า</div>`:''}
                     ${this.auth.can('manage_users')?`<div class="user-mgmt-btn nav-item"><span class="nav-icon">👥</span>จัดการผู้ใช้</div>`:''}
                     ${this.auth.can('demo')?`<div class="demo-btn nav-item"><span class="nav-icon">🧪</span>สร้างข้อมูลจำลอง</div>`:''}
@@ -1000,6 +1135,7 @@ class POSApp {
                 
                 <div class="flex border-b border-gray-100 px-5">
                     <button data-settings-tab="sheets" class="py-3 px-4 text-sm font-medium border-b-2 ${activeTab==='sheets'?'border-teal-500 text-teal-600':'border-transparent text-gray-500'}">📊 Google Sheets</button>
+                    <button data-settings-tab="firebase" class="py-3 px-4 text-sm font-medium border-b-2 ${activeTab==='firebase'?'border-teal-500 text-teal-600':'border-transparent text-gray-500'}">🔥 Firebase</button>
                     <button data-settings-tab="supabase" class="py-3 px-4 text-sm font-medium border-b-2 ${activeTab==='supabase'?'border-teal-500 text-teal-600':'border-transparent text-gray-500'}">☁️ Supabase</button>
                     <button data-settings-tab="logo" class="py-3 px-4 text-sm font-medium border-b-2 ${activeTab==='logo'?'border-teal-500 text-teal-600':'border-transparent text-gray-500'}">🖼️ โลโก้ & ชื่อร้าน</button>
                 </div>
@@ -1022,6 +1158,28 @@ class POSApp {
                         <button class="close-settings px-5 py-3 border-2 border-gray-200 rounded-xl font-medium">ปิด</button>
                     </div>
                 `:''}
+                ${activeTab==='firebase'?`
+                    <div class="mb-4 p-3 rounded-lg ${this.state.firebaseUrl?'bg-orange-50 border border-orange-200':'bg-gray-50 border border-gray-200'}">
+                        <span class="text-sm">${this.state.firebaseUrl?'🔥 เชื่อมต่อ Firebase แล้ว — Realtime sync ⚡':'⚪ ยังไม่ได้ตั้งค่า Firebase'}</span>
+                    </div>
+                    <div class="mb-5">
+                        <label class="block text-sm font-bold mb-2">🔗 Firebase Database URL</label>
+                        <input type="text" id="firebase-url" value="${this.state.firebaseUrl}" placeholder="https://your-project-default-rtdb.firebaseio.com" class="w-full px-4 py-2.5 border-2 rounded-xl text-sm focus:border-orange-400 focus:outline-none"/>
+                    </div>
+                    <div class="bg-orange-50 border border-orange-200 rounded-xl p-4 mb-5 text-xs text-orange-900 space-y-1">
+                        <div class="font-bold text-sm mb-2">📋 ตั้งค่า Firebase (ครั้งเดียว — ง่ายกว่า Supabase มาก!)</div>
+                        <p>1. ไปที่ <a href="https://console.firebase.google.com" target="_blank" class="underline font-bold">console.firebase.google.com</a></p>
+                        <p>2. กด <strong>Add project</strong> → ตั้งชื่อ → กด Continue จนเสร็จ</p>
+                        <p>3. เมนูซ้าย → <strong>Realtime Database</strong> → <strong>Create database</strong></p>
+                        <p>4. เลือก <strong>Start in test mode</strong> → Enable</p>
+                        <p>5. Copy URL ที่ขึ้นต้นด้วย <code class="bg-orange-100 px-1 rounded">https://...firebaseio.com</code> มาวางด้านบน</p>
+                        <p class="text-green-700 font-bold mt-2">✅ แค่นี้พอ! ไม่ต้องรัน SQL ไม่ต้องตั้งค่าอะไรเพิ่ม</p>
+                    </div>
+                    <div class="flex gap-3">
+                        <button class="save-firebase flex-1 py-3 rounded-xl font-bold export-action-btn" style="background:#f97316;color:white">🔥 เชื่อมต่อ Firebase</button>
+                        <button class="close-settings px-5 py-3 border-2 border-gray-200 rounded-xl font-medium">ปิด</button>
+                    </div>
+                `:''}
                 ${activeTab==='supabase'?`
                     <div class="mb-4 p-3 rounded-lg ${hasSupa?'bg-green-50 border border-green-200':'bg-gray-50 border border-gray-200'}">
                         <span class="text-sm">${hasSupa?'🟢 เชื่อมต่อ Supabase แล้ว — ซิงค์ Realtime อัตโนมัติ ⚡':'⚪ ยังไม่ได้ตั้งค่า Supabase'}</span>
@@ -1038,7 +1196,7 @@ class POSApp {
                             <p>1. ไปที่ <a href="https://supabase.com" target="_blank" class="underline font-bold">supabase.com</a> → สร้าง project ใหม่ (ฟรี)</p>
                             <p>2. ไปที่ <strong>SQL Editor</strong> และรัน SQL นี้:</p>
                             <pre class="bg-gray-900 text-green-400 p-3 rounded-lg text-xs mt-2 overflow-x-auto">-- ตาราง orders
-CREATE TABLE orders (
+CREATE TABLE IF NOT EXISTS orders (
   id bigint PRIMARY KEY,
   timestamp timestamptz,
   items jsonb,
@@ -1054,15 +1212,17 @@ CREATE TABLE orders (
 );
 
 -- ตาราง pos_config (สินค้า / users / settings)
-CREATE TABLE pos_config (
+CREATE TABLE IF NOT EXISTS pos_config (
   key text PRIMARY KEY,
   value text,
   updated_at timestamptz DEFAULT now()
 );
 
--- เปิด Public Access
+-- เปิด Public Access (รันแค่ครั้งแรก ถ้า error "already exists" ข้ามได้เลย)
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pos_config ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "allow_all_orders" ON orders;
+DROP POLICY IF EXISTS "allow_all_config" ON pos_config;
 CREATE POLICY "allow_all_orders" ON orders FOR ALL USING (true) WITH CHECK (true);
 CREATE POLICY "allow_all_config" ON pos_config FOR ALL USING (true) WITH CHECK (true);
 
@@ -1712,6 +1872,10 @@ ALTER PUBLICATION supabase_realtime ADD TABLE pos_config;</pre>
         if(this.state.supabaseUrl&&this.state.supabaseKey){
             this._syncDemoBatch(newOrders,0);
         }
+        // Sync demo data to Firebase in batches
+        if(this.state.firebaseUrl){
+            this._syncFirebaseBatch(newOrders,0);
+        }
     }
 
     // Sync demo orders to Supabase in batches of 50
@@ -1878,6 +2042,12 @@ ALTER PUBLICATION supabase_realtime ADD TABLE pos_config;</pre>
         // Sidebar buttons
         const stb=document.querySelector('.settings-btn');if(stb)stb.addEventListener('click',()=>{this.state.showSettings=true;this.state.settingsTab='sheets';this.render();});
         const sub=document.querySelector('.supabase-btn');if(sub)sub.addEventListener('click',()=>{this.state.showSettings=true;this.state.settingsTab='supabase';this.render();});
+        const fbb=document.querySelector('.firebase-btn');if(fbb)fbb.addEventListener('click',()=>{this.state.showSettings=true;this.state.settingsTab='firebase';this.render();});
+        const snb=document.querySelector('.sync-now-btn');if(snb)snb.addEventListener('click',async()=>{
+            snb.textContent='⏳ กำลังดึง...';
+            if(this.state.firebaseUrl) await this.loadFromFirebase();
+            else if(this.state.supabaseUrl) await this.loadFromSupabase();
+        });
         const demo=document.querySelector('.demo-btn');if(demo)demo.addEventListener('click',()=>{this.state.showDemoGenerator=true;this.render();});
         const ca=document.querySelector('.clear-all-btn');if(ca)ca.addEventListener('click',()=>this.clearAllData());
         const um=document.querySelector('.user-mgmt-btn');if(um)um.addEventListener('click',()=>{this.state.showUserMgmt=true;this.render();});
@@ -1915,6 +2085,16 @@ ALTER PUBLICATION supabase_realtime ADD TABLE pos_config;</pre>
         });
         const ae=document.getElementById('auto-export-toggle');if(ae)ae.addEventListener('change',e=>{this.state.autoExportSheets=e.target.checked;localStorage.setItem('autoExportSheets',e.target.checked);});
         const tb=document.querySelector('.test-sheets-btn');if(tb)tb.addEventListener('click',async()=>{if(!this.state.googleSheetUrl){alert('⚠️ ใส่ URL ก่อน');return;}try{const now=new Date();await fetch(this.state.googleSheetUrl,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:[{date:now.toLocaleDateString('th-TH'),time:now.toLocaleTimeString('th-TH'),category:'TEST',item:'🧪 ทดสอบ',quantity:1,price:0,cost:0,subtotal:'0',discount:'0',vat:'0',total:'0',profit:'0',staff:'test'}],month:'test'})});alert('✅ ส่งสำเร็จ! เปิด Google Sheet ตรวจสอบ');}catch(e){alert('❌ '+e.message);}});
+        const sfb=document.querySelector('.save-firebase');if(sfb)sfb.addEventListener('click',async()=>{
+            const url=document.getElementById('firebase-url').value.trim().replace(/\/$/,'');
+            if(!url){alert('⚠️ กรุณากรอก Firebase URL');return;}
+            this.state.firebaseUrl=url;
+            localStorage.setItem('firebaseUrl',url);
+            this.state.showSettings=false;this.render();
+            await this.loadFromFirebase();
+            this.startFirebaseSync();
+            alert('🔥 เชื่อมต่อ Firebase สำเร็จ!\n✅ Realtime sync เปิดแล้ว ข้ามเครื่องได้ทันที');
+        });
         const ssv=document.querySelector('.save-supabase');if(ssv)ssv.addEventListener('click',async()=>{
             const url=document.getElementById('supabase-url').value.trim();
             const key=document.getElementById('supabase-key').value.trim();
@@ -2121,6 +2301,7 @@ ALTER PUBLICATION supabase_realtime ADD TABLE pos_config;</pre>
                 this.state.orders=this.state.orders.filter(x=>x.id!==oid);
                 this.deleteOrderById(oid);
                 this.deleteOrderFromSupabase(oid);
+                this.deleteOrderFromFirebase(oid);
                 this.render();
             }
         }));
