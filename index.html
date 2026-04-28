@@ -257,10 +257,8 @@ class POSApp {
             exportYear:String(new Date().getFullYear()),
             googleSheetUrl:localStorage.getItem('googleSheetUrl')||'',
             autoExportSheets:localStorage.getItem('autoExportSheets')==='true',
-            // ====== ใส่ค่าจาก Supabase → Settings → API ======
-            supabaseUrl:'https://osxflpaowdolzemujjul.storage.supabase.co/storage/v1/s3',
-            supabaseKey:'sb_publishable_MdGqJKgNzfHw9Vr_5SLQfQ_S_x_wE96',
-            // =================================================
+            supabaseUrl: localStorage.getItem('supabaseUrl') || 'https://osxflpaowdolzemujjul.storage.supabase.co/storage/v1/s3',
+            supabaseKey: localStorage.getItem('supabaseKey') || 'sb_publishable_MdGqJKgNzfHw9Vr_5SLQfQ_S_x_wE96',
             showDemoGenerator:false, demoMonths:3, demoOrdersPerDay:'15-30', demoPeakHour:true,
             // New
             showReceipt:false, lastOrder:null, loginError:'',
@@ -388,9 +386,10 @@ class POSApp {
         const _origSaveUsers = this.auth.saveUsers.bind(this.auth);
         this.auth.saveUsers = () => { _origSaveUsers(); this.syncConfigToSupabase('users', this.auth.users); };
 
-        // ถ้ามี Supabase อยู่แล้ว ให้โหลดข้อมูลและเริ่ม polling ทันที
+        // ถ้ามี Supabase อยู่แล้ว ให้โหลดข้อมูลและเริ่ม realtime sync ทันที
         if(this.state.supabaseUrl && this.state.supabaseKey) {
             this.loadFromSupabase();
+            this.startRealtimeSync();
             this.startPolling();
         }
     }
@@ -597,6 +596,56 @@ class POSApp {
         },30000); // ซิงค์ทุก 30 วินาที
     }
 
+    // ==================== SUPABASE REALTIME ====================
+    startRealtimeSync() {
+        if(!this.state.supabaseUrl||!this.state.supabaseKey) return;
+        // Close existing WebSocket
+        if(this._ws){try{this._ws.onclose=null;this._ws.close();}catch(e){}this._ws=null;}
+        const wsUrl=this.state.supabaseUrl.replace(/^https/,'wss').replace(/^http/,'ws')+
+            `/realtime/v1/websocket?apikey=${encodeURIComponent(this.state.supabaseKey)}&vsn=1.0.0`;
+        let ws;
+        try{ ws=new WebSocket(wsUrl); }catch(e){ console.warn('[RT] WebSocket ไม่รองรับ'); return; }
+        this._ws=ws;
+        let hbTimer=null;
+        const joinRef='1';
+        ws.onopen=()=>{
+            console.log('[RT] เชื่อมต่อ Supabase Realtime สำเร็จ ✅');
+            ws.send(JSON.stringify({topic:'realtime:pos_sync',event:'phx_join',payload:{config:{broadcast:{self:false},presence:{key:''},postgres_changes:[{event:'*',schema:'public',table:'orders'},{event:'*',schema:'public',table:'pos_config'}]}},ref:joinRef,join_ref:joinRef}));
+            // Heartbeat ทุก 20 วินาที
+            hbTimer=setInterval(()=>{if(ws.readyState===WebSocket.OPEN)ws.send(JSON.stringify({topic:'phoenix',event:'heartbeat',payload:{},ref:'hb'}));},20000);
+        };
+        ws.onmessage=(ev)=>{
+            let msg;try{msg=JSON.parse(ev.data);}catch(e){return;}
+            if(msg.event==='postgres_changes'&&msg.payload?.data){
+                const ch=msg.payload.data;
+                if(ch.table==='orders'){
+                    if(ch.eventType==='INSERT'||ch.eventType==='UPDATE'){
+                        const o=ch.new;
+                        const mapped={id:o.id,timestamp:o.timestamp,items:o.items,subtotal:o.subtotal,totalCost:o.total_cost,discount:o.discount,vat:o.vat,total:o.total,profit:o.profit,staffId:o.staff_id||'',staffName:o.staff_name||'',paymentMethod:o.payment_method||'cash'};
+                        const idx=this.state.orders.findIndex(x=>x.id===o.id);
+                        if(idx<0){this.state.orders.unshift(mapped);}else{this.state.orders[idx]=mapped;}
+                        this.updateOrderById(mapped);
+                        this.render();
+                        console.log('[RT] ออเดอร์ใหม่จากเครื่องอื่น:',o.id);
+                    } else if(ch.eventType==='DELETE'){
+                        const id=ch.old?.id;
+                        if(id){this.state.orders=this.state.orders.filter(x=>x.id!==id);this.deleteOrderById(id);this.render();}
+                    }
+                } else if(ch.table==='pos_config'){
+                    // สินค้า/ผู้ใช้เปลี่ยน — โหลดใหม่
+                    this.loadFromSupabase();
+                }
+            }
+        };
+        ws.onerror=(e)=>{ console.warn('[RT] WebSocket error',e); };
+        ws.onclose=(e)=>{
+            clearInterval(hbTimer);
+            console.log('[RT] ตัดการเชื่อมต่อ — reconnect ใน 5 วินาที');
+            // Reconnect เฉพาะเมื่อยังมี credentials
+            setTimeout(()=>{ if(this.state.supabaseUrl&&this.state.supabaseKey&&this._ws===ws) this.startRealtimeSync(); },5000);
+        };
+    }
+
     // ==================== CART ACTIONS ====================
     addToCart(product) {
         if(product.isDrink){this.state.showSweetness=true;this.state.sweetnessProduct=product;this.render();return;}
@@ -751,9 +800,9 @@ class POSApp {
                         <span id="settings-arrow" style="font-size:10px;transition:transform .2s">${this.state.settingsOpen?'▲':'▼'}</span>
                     </button>
                 </div>
-                <div id="settings-menu" style="overflow:hidden;transition:max-height .25s ease;max-height:${this.state.settingsOpen!==false?'300px':'0px'}">
+                <div id="settings-menu" style="overflow:hidden;transition:max-height .25s ease;max-height:${this.state.settingsOpen!==false?'400px':'0px'}">
                     ${this.auth.can('settings')?`<div class="settings-btn nav-item"><span class="nav-icon">📊</span>Google Drive ${this.state.autoExportSheets&&this.state.googleSheetUrl?'<span style="color:#00BFA5;margin-left:auto">●</span>':''}</div>`:''}
-                    ${this.auth.can('supabase')?`<div class="supabase-btn nav-item"><span class="nav-icon">☁️</span>Supabase Cloud ${this.state.supabaseUrl?'<span style="color:#10b981;margin-left:auto">●</span>':''}</div>`:''}
+                    ${this.auth.can('supabase')?`<div class="supabase-btn nav-item"><span class="nav-icon">☁️</span>Supabase Cloud ${this.state.supabaseUrl?'<span style="color:#10b981;margin-left:auto" title="Realtime sync เปิดอยู่">⚡</span>':''}</div>`:''}
                     ${this.auth.can('manage_products')?`<div class="product-mgmt-btn nav-item"><span class="nav-icon">🛍️</span>จัดการสินค้า</div>`:''}
                     ${this.auth.can('manage_users')?`<div class="user-mgmt-btn nav-item"><span class="nav-icon">👥</span>จัดการผู้ใช้</div>`:''}
                     ${this.auth.can('demo')?`<div class="demo-btn nav-item"><span class="nav-icon">🧪</span>สร้างข้อมูลจำลอง</div>`:''}
@@ -975,7 +1024,7 @@ class POSApp {
                 `:''}
                 ${activeTab==='supabase'?`
                     <div class="mb-4 p-3 rounded-lg ${hasSupa?'bg-green-50 border border-green-200':'bg-gray-50 border border-gray-200'}">
-                        <span class="text-sm">${hasSupa?'🟢 เชื่อมต่อ Supabase แล้ว — ซิงค์ทุก 30 วินาที':'⚪ ยังไม่ได้ตั้งค่า Supabase'}</span>
+                        <span class="text-sm">${hasSupa?'🟢 เชื่อมต่อ Supabase แล้ว — ซิงค์ Realtime อัตโนมัติ ⚡':'⚪ ยังไม่ได้ตั้งค่า Supabase'}</span>
                     </div>
                     <div class="space-y-4 mb-5">
                         <div><label class="block text-sm font-bold mb-2">🔗 Supabase URL</label>
@@ -1011,13 +1060,17 @@ CREATE TABLE pos_config (
   updated_at timestamptz DEFAULT now()
 );
 
--- เปิด Public Access (Row Level Security off)
+-- เปิด Public Access
 ALTER TABLE orders ENABLE ROW LEVEL SECURITY;
 ALTER TABLE pos_config ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "allow_all_orders" ON orders FOR ALL USING (true) WITH CHECK (true);
-CREATE POLICY "allow_all_config" ON pos_config FOR ALL USING (true) WITH CHECK (true);</pre>
+CREATE POLICY "allow_all_config" ON pos_config FOR ALL USING (true) WITH CHECK (true);
+
+-- เปิด Realtime sync (สำคัญมาก!)
+ALTER PUBLICATION supabase_realtime ADD TABLE orders;
+ALTER PUBLICATION supabase_realtime ADD TABLE pos_config;</pre>
                             <p class="mt-2">3. ไปที่ <strong>Settings → API</strong> → คัดลอก URL และ anon key มาใส่ด้านบน</p>
-                            <p class="mt-1 text-green-700 font-bold">✅ หลังกด "เชื่อมต่อ" ข้อมูลจะซิงค์ข้ามเครื่องอัตโนมัติ</p>
+                            <p class="mt-1 text-green-700 font-bold">✅ หลังกด "เชื่อมต่อ" ข้อมูลจะซิงค์ข้ามเครื่องแบบ Realtime ทันที ไม่ต้องกดอะไรอีก</p>
                         </div>
                     </div>
                     <div class="flex gap-3">
@@ -1654,7 +1707,24 @@ CREATE POLICY "allow_all_config" ON pos_config FOR ALL USING (true) WITH CHECK (
     }
 
     // ==================== DEMO DATA GENERATOR ====================
-    generateDemoData(){const[minOrders,maxOrders]=this.state.demoOrdersPerDay.split('-').map(Number);const months=this.state.demoMonths;const usePeak=this.state.demoPeakHour;const coffeeP=this.products.filter(p=>p.category==='coffee');const teaP=this.products.filter(p=>p.category==='tea');const softP=this.products.filter(p=>p.category==='softdrink');const bakeryP=this.products.filter(p=>p.category==='bakery');const otherP=this.products.filter(p=>p.category==='other'&&!p.isAddon);const promoP=this.products.filter(p=>p.category==='promotion');const allDrinks=[...coffeeP,...teaP,...softP];const allFood=[...bakeryP,...otherP,...promoP];const topDrinks=['ลาเต้ เย็น','คาปูชิโน่ เย็น','อเมริกาโน่ เย็น','ชาไทย เย็น','มอคค่า เย็น','ชาเขียวมัทฉะ เย็น','ส้มสมูทตี้'];const topFood=['ขนมปังปิ้งเนย+นม','เค้กช็อคโกแลต','แซนวิชแฮมชีส','คุกกี้ชิ้นใหญ่','วาฟเฟิล'];function wPool(items,tops){const p=[];items.forEach(i=>{const w=tops.includes(i.name)?4:1;for(let x=0;x<w;x++)p.push(i);});return p;}const drinkPool=wPool(allDrinks,topDrinks);const foodPool=wPool(allFood,topFood);function rand(min,max){return Math.floor(Math.random()*(max-min+1))+min;}function pick(arr){return arr[rand(0,arr.length-1)];}const sweets=[0,25,50,75,100];function rSweet(){return sweets[rand(0,sweets.length-1)];}const peakHours=usePeak?[7,8,9,11,12,13,15,16,17]:Array.from({length:14},(_,i)=>i+7);const newOrders=[];let totalGenerated=0;const startDate=new Date();startDate.setMonth(startDate.getMonth()-months);startDate.setHours(0,0,0,0);const currentDate=new Date(startDate);while(currentDate<=new Date()){const numOrders=rand(minOrders,maxOrders);for(let j=0;j<numOrders;j++){const orderTime=new Date(currentDate);const h=pick(peakHours);orderTime.setHours(h,rand(0,59),rand(0,59),0);const itemCount=rand(1,3);const items=[];for(let k=0;k<itemCount;k++){const isDrinkItem=Math.random()<.7;const product=isDrinkItem?pick(drinkPool):pick(foodPool);const qty=Math.random()<.85?1:2;let oi={...product,quantity:qty};if(product.isDrink){const sw=rSweet();oi.originalName=product.name;oi.name=`${product.name} (${sw}%)`;oi.sweetness=sw;}if(product.isDrink&&product.category==='coffee'&&Math.random()<.15){oi.extraShots=1;oi.price=product.price+10;}const ei=items.findIndex(it=>it.name===oi.name);if(ei>=0)items[ei].quantity+=qty;else items.push(oi);}const sub=items.reduce((s,it)=>s+it.price*it.quantity,0);const tc=items.reduce((s,it)=>s+it.cost*it.quantity,0);const disc=(sub*10)/100;const vat=(sub-disc)*.07;const tot=sub-disc+vat;const prof=tot-tc;newOrders.push({id:orderTime.getTime()+rand(0,999),timestamp:orderTime.toISOString(),items,subtotal:sub,totalCost:tc,discount:disc,vat,total:tot,profit:prof,staffName:'Demo'});totalGenerated++;}currentDate.setDate(currentDate.getDate()+1);}newOrders.sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));this._clearIDB();this.state.orders=newOrders;this._saveBatch(newOrders);this.state.showDemoGenerator=false;const tRev=newOrders.reduce((s,o)=>s+o.total,0);const tProf=newOrders.reduce((s,o)=>s+o.profit,0);alert(`✅ สร้างข้อมูลจำลองสำเร็จ!\n\n📊 ${totalGenerated.toLocaleString()} ออเดอร์\n💰 ยอดขาย ฿${tRev.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,',')}\n📈 กำไร ฿${tProf.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,',')}`);this.render();}
+    generateDemoData(){const[minOrders,maxOrders]=this.state.demoOrdersPerDay.split('-').map(Number);const months=this.state.demoMonths;const usePeak=this.state.demoPeakHour;const coffeeP=this.products.filter(p=>p.category==='coffee');const teaP=this.products.filter(p=>p.category==='tea');const softP=this.products.filter(p=>p.category==='softdrink');const bakeryP=this.products.filter(p=>p.category==='bakery');const otherP=this.products.filter(p=>p.category==='other'&&!p.isAddon);const promoP=this.products.filter(p=>p.category==='promotion');const allDrinks=[...coffeeP,...teaP,...softP];const allFood=[...bakeryP,...otherP,...promoP];const topDrinks=['ลาเต้ เย็น','คาปูชิโน่ เย็น','อเมริกาโน่ เย็น','ชาไทย เย็น','มอคค่า เย็น','ชาเขียวมัทฉะ เย็น','ส้มสมูทตี้'];const topFood=['ขนมปังปิ้งเนย+นม','เค้กช็อคโกแลต','แซนวิชแฮมชีส','คุกกี้ชิ้นใหญ่','วาฟเฟิล'];function wPool(items,tops){const p=[];items.forEach(i=>{const w=tops.includes(i.name)?4:1;for(let x=0;x<w;x++)p.push(i);});return p;}const drinkPool=wPool(allDrinks,topDrinks);const foodPool=wPool(allFood,topFood);function rand(min,max){return Math.floor(Math.random()*(max-min+1))+min;}function pick(arr){return arr[rand(0,arr.length-1)];}const sweets=[0,25,50,75,100];function rSweet(){return sweets[rand(0,sweets.length-1)];}const peakHours=usePeak?[7,8,9,11,12,13,15,16,17]:Array.from({length:14},(_,i)=>i+7);const newOrders=[];let totalGenerated=0;const startDate=new Date();startDate.setMonth(startDate.getMonth()-months);startDate.setHours(0,0,0,0);const currentDate=new Date(startDate);while(currentDate<=new Date()){const numOrders=rand(minOrders,maxOrders);for(let j=0;j<numOrders;j++){const orderTime=new Date(currentDate);const h=pick(peakHours);orderTime.setHours(h,rand(0,59),rand(0,59),0);const itemCount=rand(1,3);const items=[];for(let k=0;k<itemCount;k++){const isDrinkItem=Math.random()<.7;const product=isDrinkItem?pick(drinkPool):pick(foodPool);const qty=Math.random()<.85?1:2;let oi={...product,quantity:qty};if(product.isDrink){const sw=rSweet();oi.originalName=product.name;oi.name=`${product.name} (${sw}%)`;oi.sweetness=sw;}if(product.isDrink&&product.category==='coffee'&&Math.random()<.15){oi.extraShots=1;oi.price=product.price+10;}const ei=items.findIndex(it=>it.name===oi.name);if(ei>=0)items[ei].quantity+=qty;else items.push(oi);}const sub=items.reduce((s,it)=>s+it.price*it.quantity,0);const tc=items.reduce((s,it)=>s+it.cost*it.quantity,0);const disc=(sub*10)/100;const vat=(sub-disc)*.07;const tot=sub-disc+vat;const prof=tot-tc;newOrders.push({id:orderTime.getTime()+rand(0,999),timestamp:orderTime.toISOString(),items,subtotal:sub,totalCost:tc,discount:disc,vat,total:tot,profit:prof,staffName:'Demo'});totalGenerated++;}currentDate.setDate(currentDate.getDate()+1);}newOrders.sort((a,b)=>new Date(b.timestamp)-new Date(a.timestamp));this._clearIDB();this.state.orders=newOrders;this._saveBatch(newOrders);this.state.showDemoGenerator=false;const tRev=newOrders.reduce((s,o)=>s+o.total,0);const tProf=newOrders.reduce((s,o)=>s+o.profit,0);alert(`✅ สร้างข้อมูลจำลองสำเร็จ!\n\n📊 ${totalGenerated.toLocaleString()} ออเดอร์\n💰 ยอดขาย ฿${tRev.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,',')}\n📈 กำไร ฿${tProf.toFixed(0).replace(/\B(?=(\d{3})+(?!\d))/g,',')}\n\n${this.state.supabaseUrl?'☁️ กำลัง sync ขึ้น Supabase...\n(เครื่องอื่นจะได้ข้อมูลภายใน 1-2 นาที)':''}`);this.render();
+        // Sync demo data to Supabase in batches
+        if(this.state.supabaseUrl&&this.state.supabaseKey){
+            this._syncDemoBatch(newOrders,0);
+        }
+    }
+
+    // Sync demo orders to Supabase in batches of 50
+    async _syncDemoBatch(orders, offset) {
+        const BATCH=50;
+        const slice=orders.slice(offset,offset+BATCH);
+        if(!slice.length) { console.log('[Demo Sync] อัปโหลดครบแล้ว!'); return; }
+        const body=slice.map(o=>({id:o.id,timestamp:o.timestamp,items:o.items,subtotal:o.subtotal,total_cost:o.totalCost,discount:o.discount,vat:o.vat,total:o.total,profit:o.profit,staff_id:o.staffId||'',staff_name:o.staffName||'',payment_method:o.paymentMethod||'cash'}));
+        await this._supaFetch('orders',{method:'POST',headers:{'Prefer':'resolution=merge-duplicates'},body:JSON.stringify(body)});
+        console.log(`[Demo Sync] อัปโหลดแล้ว ${Math.min(offset+BATCH,orders.length)}/${orders.length}`);
+        setTimeout(()=>this._syncDemoBatch(orders,offset+BATCH),300);
+    }
+
     clearAllData(){if(confirm('⚠️ ยืนยันล้างข้อมูลทั้งหมด?\nไม่สามารถย้อนกลับได้!')){this.state.orders=[];this._clearIDB();alert('🗑️ ล้างข้อมูลทั้งหมดเรียบร้อย!');this.render();}}
 
     // ==================== BIND LOGIN EVENTS ====================
@@ -1845,7 +1915,18 @@ CREATE POLICY "allow_all_config" ON pos_config FOR ALL USING (true) WITH CHECK (
         });
         const ae=document.getElementById('auto-export-toggle');if(ae)ae.addEventListener('change',e=>{this.state.autoExportSheets=e.target.checked;localStorage.setItem('autoExportSheets',e.target.checked);});
         const tb=document.querySelector('.test-sheets-btn');if(tb)tb.addEventListener('click',async()=>{if(!this.state.googleSheetUrl){alert('⚠️ ใส่ URL ก่อน');return;}try{const now=new Date();await fetch(this.state.googleSheetUrl,{method:'POST',mode:'no-cors',headers:{'Content-Type':'application/json'},body:JSON.stringify({data:[{date:now.toLocaleDateString('th-TH'),time:now.toLocaleTimeString('th-TH'),category:'TEST',item:'🧪 ทดสอบ',quantity:1,price:0,cost:0,subtotal:'0',discount:'0',vat:'0',total:'0',profit:'0',staff:'test'}],month:'test'})});alert('✅ ส่งสำเร็จ! เปิด Google Sheet ตรวจสอบ');}catch(e){alert('❌ '+e.message);}});
-        const ssv=document.querySelector('.save-supabase');if(ssv)ssv.addEventListener('click',async()=>{this.state.supabaseUrl=document.getElementById('supabase-url').value;this.state.supabaseKey=document.getElementById('supabase-key').value;localStorage.setItem('supabaseUrl',this.state.supabaseUrl);localStorage.setItem('supabaseKey',this.state.supabaseKey);this.state.showSettings=false;this.render();await this.loadFromSupabase();this.startPolling();alert('☁️ เชื่อมต่อ Supabase สำเร็จ! ซิงค์ข้อมูลเรียบร้อย');});
+        const ssv=document.querySelector('.save-supabase');if(ssv)ssv.addEventListener('click',async()=>{
+            const url=document.getElementById('supabase-url').value.trim();
+            const key=document.getElementById('supabase-key').value.trim();
+            if(!url||!key){alert('⚠️ กรุณากรอก URL และ Key ให้ครบ');return;}
+            this.state.supabaseUrl=url;this.state.supabaseKey=key;
+            localStorage.setItem('supabaseUrl',url);localStorage.setItem('supabaseKey',key);
+            this.state.showSettings=false;this.render();
+            await this.loadFromSupabase();
+            this.startRealtimeSync();
+            this.startPolling();
+            alert('☁️ เชื่อมต่อ Supabase สำเร็จ!\n✅ ซิงค์ข้อมูลอัตโนมัติแบบ Realtime แล้ว');
+        });
         // User management
         const cum=document.querySelector('.close-user-mgmt');if(cum)cum.addEventListener('click',()=>{this.state.showUserMgmt=false;this.state.showAddUser=false;this.render();});
         const aub=document.querySelector('.add-user-btn');if(aub)aub.addEventListener('click',()=>{this.state.showAddUser=true;this.render();});
